@@ -1,0 +1,195 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Wiki Mind Map</title>
+    <!-- Bootstrap 5 -->
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+    <!-- Vis.js CSS -->
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/vis/4.21.0/vis.min.css" rel="stylesheet" type="text/css" />
+    <style>
+        /* Custom Styles */
+        body.dark-mode {
+            background-color: #121212;
+            color: #ffffff;
+        }
+        .dark-mode .card {
+            background-color: #1e1e1e;
+            color: #ffffff;
+        }
+        .dark-mode .modal-content {
+            background-color: #1e1e1e;
+            color: #ffffff;
+        }
+        /* Mind Map Container */
+        #mynetwork {
+            width: 100%;
+            height: 600px;
+            border: 1px solid lightgray;
+            background-color: #f8f9fa;
+        }
+        .dark-mode #mynetwork {
+            border-color: #444;
+            background-color: #222;
+        }
+        /* Saved Topics Card */
+        .saved-topics-card {
+            background-color: #ffffff;
+            color: #000000;
+            border-color: #dee2e6;
+        }
+        .dark-mode .saved-topics-card {
+            background-color: #212529;
+            color: #ffffff;
+            border-color: #495057;
+        }
+        .dark-mode .saved-topics-card .card-header {
+            background-color: #495057 !important;
+            color: #ffffff !important;
+        }
+        .saved-topic-item {
+            background-color: #f8f9fa;
+            color: #000000;
+            border-color: #dee2e6;
+        }
+        .dark-mode .saved-topic-item {
+            background-color: #495057;
+            color: #ffffff;
+            border-color: #6c757d;
+        }
+        /* Info Overlay */
+        .info-overlay {
+            background-color: #ffffff;
+            color: #000000;
+            border-top-color: #dee2e6;
+        }
+        .dark-mode .info-overlay {
+            background-color: #212529;
+            color: #ffffff;
+            border-top-color: #495057;
+        }
+        /* Loading text */
+        .loading-text {
+            color: #000000;
+        }
+        .dark-mode .loading-text {
+            color: #ffffff;
+        }
+        /* Saved topic note */
+        .saved-topic-note {
+            background-color: #e9ecef;
+            color: #000000;
+        }
+        .dark-mode .saved-topic-note {
+            background-color: #343a40;
+            color: #ffffff;
+        }
+        /* Search bar overlay */
+        #searchBarOverlay {
+            background: linear-gradient(to bottom, rgba(0,0,0,0.3), transparent);
+        }
+        .dark-mode #searchBarOverlay {
+            background: linear-gradient(to bottom, rgba(0,0,0,0.5), transparent);
+        }
+        .dark-mode .card {
+            background-color: #1e1e1e;
+            color: #ffffff;
+        }
+        .dark-mode .card .form-label,
+        .dark-mode .card label {
+            color: #ffffff;
+        }
+        .dark-mode .form-control {
+            background-color: #2b2b2b;
+            color: #ffffff;
+            border-color: #555;
+        }
+        .dark-mode .form-control:focus {
+            background-color: #2f2f2f;
+            color: #ffffff;
+            border-color: #0dcaf0;
+            box-shadow: 0 0 0 0.25rem rgba(13, 202, 240, 0.25);
+        }
+        .dark-mode .card a {
+            color: #0dcaf0;
+        }
+        .dark-mode .form-text,
+        .dark-mode .invalid-feedback,
+        .dark-mode .text-muted {
+            color: #d6d6d6 !important;
+        }
+        .dark-mode .form-control::placeholder {
+            color: #b3b3b3;
+        }
+    </style>
+</head>
+<body class="bg-light">
+    <nav class="navbar navbar-expand-lg navbar-dark bg-primary">
+        <div class="container-fluid">
+            <a class="navbar-brand" href="{% url 'index' %}">Wiki Mind Map</a>
+            <div class="d-flex align-items-center">
+                <div class="form-check form-switch text-white me-3">
+                    <input class="form-check-input" type="checkbox" id="darkModeSwitch">
+                    <label class="form-check-label" for="darkModeSwitch">Dark Mode</label>
+                </div>
+                {% if user.is_authenticated %}
+                    <span class="text-white me-3">Hi, {{ user.username }}</span>
+                    <a class="btn btn-outline-light btn-sm" href="{% url 'logout' %}">Logout</a>
+                {% else %}
+                    <a class="btn btn-outline-light btn-sm me-2" href="{% url 'login' %}">Login</a>
+                    <a class="btn btn-light btn-sm" href="{% url 'signup' %}">Sign Up</a>
+                {% endif %}
+            </div>
+        </div>
+    </nav>
+
+    <div class="container-fluid mt-4">
+        {% if messages %}
+            <div class="row mb-3">
+                <div class="col-lg-8 col-12">
+                    {% for message in messages %}
+                        <div class="alert alert-{{ message.tags }} mb-2" role="alert">
+                            {{ message }}
+                        </div>
+                    {% endfor %}
+                </div>
+            </div>
+        {% endif %}
+        {% block content %}
+        {% endblock %}
+    </div>
+
+    <!-- Bootstrap -->
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
+    <!-- Vis.js -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/vis/4.21.0/vis.min.js"></script>
+
+    <script>
+        // Dark Mode
+        const toggle = document.getElementById('darkModeSwitch');
+        const body = document.body;
+        
+        // Check local storage
+        if (localStorage.getItem('darkMode') === 'enabled') {
+            body.classList.add('dark-mode');
+            body.classList.remove('bg-light');
+            toggle.checked = true;
+        }
+
+        toggle.addEventListener('change', () => {
+            if (toggle.checked) {
+                body.classList.add('dark-mode');
+                body.classList.remove('bg-light');
+                localStorage.setItem('darkMode', 'enabled');
+            } else {
+                body.classList.remove('dark-mode');
+                body.classList.add('bg-light');
+                localStorage.setItem('darkMode', 'disabled');
+            }
+        });
+    </script>
+    
+    {% block scripts %}{% endblock %}
+</body>
+</html>

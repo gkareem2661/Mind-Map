@@ -1,0 +1,602 @@
+{% extends 'base.html' %}
+
+{% block content %}
+<div class="row h-100">
+    <!-- LEFT COLUMN: Mind Map -->
+    <div class="col-lg-8 mb-4 d-flex flex-column" style="height: 85vh;">
+        <div class="card shadow-sm h-100 position-relative overflow-hidden">
+            <!-- Search Bar -->
+            <div id="searchBarOverlay" class="position-absolute top-0 start-0 p-3 z-3 w-100 bg-gradient" style="pointer-events: none;">
+                <div class="input-group w-50 shadow-sm" style="pointer-events: auto;">
+                    <input type="text" id="topicInput" class="form-control" placeholder="Search topic..." onkeypress="handleEnter(event)">
+                    <button class="btn btn-primary" type="button" onclick="startMap()">Explore</button>
+                    <button class="btn btn-secondary" type="button" onclick="resetView()" title="Reset View"><i class="bi bi-arrows-fullscreen"></i> Fit</button>
+                </div>
+            </div>
+
+            <!-- Mind Map Container -->
+            <div id="mynetwork" class="w-100 h-100"></div>
+            
+            <!-- Loading Visual -->
+            <div id="loading" class="position-absolute top-50 start-50 translate-middle text-center z-3" style="display:none;">
+                <div class="spinner-border text-info" style="width: 3rem; height: 3rem;" role="status"></div>
+                <div class="loading-text mt-2 fw-bold text-shadow">Fetching Data...</div>
+            </div>
+
+            <!-- Information Overlay -->
+            <div id="infoOverlay" class="info-overlay position-absolute bottom-0 start-0 w-100 p-4 z-3 border-top shadow-lg" 
+                 style="transform: translateY(100%); transition: transform 0.3s ease-in-out; max-height: 40%; overflow-y: auto;">
+                <div class="d-flex justify-content-between align-items-start mb-2">
+                    <h3 id="overlayTitle" class="fw-bold text-info">Topic Title</h3>
+                    <div>
+                        {% if user.is_authenticated %}
+                            <form action="{% url 'add_favorite' %}" method="POST" class="d-inline me-2" id="saveTopicForm" onsubmit="return saveTopicWithMindMap(event)">
+                                {% csrf_token %}
+                                <input type="hidden" name="name" id="hiddenName">
+                                <input type="hidden" name="summary" id="hiddenSummary">
+                                <input type="hidden" name="mind_map_data" id="hiddenMindMapData">
+                                <button type="submit" class="btn btn-sm btn-success fw-bold">
+                                    Save
+                                </button>
+                            </form>
+                        {% else %}
+                            <a href="{% url 'login' %}" class="btn btn-sm btn-outline-light me-2">Login to save</a>
+                        {% endif %}
+                        <button class="btn btn-sm btn-outline-secondary" onclick="closeOverlay()">Close</button>
+                    </div>
+                </div>
+                <p id="overlaySummary" class="lead fs-6"></p>
+            </div>
+        </div>
+    </div>
+
+    <!-- RIGHT COLUMN: Favorites List -->
+    <div class="col-lg-4" style="height: 85vh; overflow-y: auto;">
+        <div class="card shadow-sm h-100 saved-topics-card">
+            <div class="card-header">
+                <h5 class="mb-0">Saved Topics</h5>
+            </div>
+            <div class="card-body p-2">
+                {% if not user.is_authenticated %}
+                    <div class="text-center py-4 text-muted">
+                        <p class="mb-0">Log in to save and view your favorite topics.</p>
+                    </div>
+                {% else %}
+                {% for topic in favorites %}
+                <div class="card mb-3 shadow-sm saved-topic-item">
+                    <div class="card-body">
+                        <h5 class="card-title text-info">{{ topic.name }}</h5>
+                        <p class="card-text small">{{ topic.summary|truncatewords:15 }}</p>
+                        
+                        {% if topic.user_notes %}
+                            <div class="alert p-2 small mb-2 border-info saved-topic-note">
+                                <strong>Note:</strong> {{ topic.user_notes }}
+                            </div>
+                        {% endif %}
+
+                        <div class="d-flex justify-content-end gap-2">
+                            {% if topic.mind_map_data %}
+                                <button type="button" class="btn btn-sm btn-outline-info load-map-btn" data-topic-id="{{ topic.id }}">
+                                    Load Map
+                                </button>
+                            {% endif %}
+                            <button type="button" class="btn btn-sm btn-outline-secondary" data-bs-toggle="modal" data-bs-target="#editModal{{ topic.id }}">
+                                Edit
+                            </button>
+                            <a href="{% url 'delete_favorite' topic.id %}" class="btn btn-sm btn-outline-danger" onclick="return confirm('Delete this topic?')">Delete</a>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Update Modal -->
+                <div class="modal fade text-dark" id="editModal{{ topic.id }}" tabindex="-1" aria-hidden="true">
+                    <div class="modal-dialog">
+                        <div class="modal-content">
+                            <form action="{% url 'update_favorite' topic.id %}" method="POST">
+                                {% csrf_token %}
+                                <div class="modal-header">
+                                    <h5 class="modal-title">Add Note for {{ topic.name }}</h5>
+                                    <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+                                </div>
+                                <div class="modal-body">
+                                    <textarea name="user_notes" class="form-control" rows="3">{{ topic.user_notes }}</textarea>
+                                </div>
+                                <div class="modal-footer">
+                                    <button type="submit" class="btn btn-primary">Save Note</button>
+                                </div>
+                            </form>
+                        </div>
+                    </div>
+                </div>
+                {% empty %}
+                    <div class="text-center py-4 text-muted">
+                        <p>No favorite topics saved yet.</p>
+                    </div>
+                {% endfor %}
+                {% endif %}
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+    // Vis.js Setup
+    var exploredNodes = new Set(); 
+    var nodes = new vis.DataSet([]);
+    var edges = new vis.DataSet([]);
+    var container = document.getElementById('mynetwork');
+    var data = { nodes: nodes, edges: edges };
+    
+    function getNetworkOptions(isDarkMode) {
+        return {
+            nodes: {
+                shape: 'dot',
+                size: 25,
+                font: { 
+                    size: 16, 
+                    color: isDarkMode ? '#ffffff' : '#000000', 
+                    strokeWidth: 4, 
+                    strokeColor: isDarkMode ? '#000000' : '#ffffff', 
+                    face: 'arial' 
+                },
+                borderWidth: 2,
+                shadow: true
+            },
+            edges: {
+                width: 2,
+                color: { color: '#6c757d', highlight: '#0dcaf0', opacity: 0.5 },
+                smooth: { type: 'continuous' },
+                length: 300 
+            },
+            physics: {
+                stabilization: false,
+                barnesHut: {
+                    gravitationalConstant: -8000,
+                    springConstant: 0.001, 
+                    springLength: 300
+                }
+            },
+            interaction: {
+                hover: true,
+                tooltipDelay: 200,
+                zoomView: true
+            }
+        };
+    }
+    
+    // Initialize with current mode
+    const isDarkMode = document.body.classList.contains('dark-mode');
+    var options = getNetworkOptions(isDarkMode);
+    var network = new vis.Network(container, data, options);
+    
+    // Function to update network colors when mode changes
+    function updateNetworkColors() {
+        const isDark = document.body.classList.contains('dark-mode');
+        const newOptions = getNetworkOptions(isDark);
+        network.setOptions(newOptions);
+        
+        // Update existing nodes font colors
+        const allNodes = nodes.get();
+        allNodes.forEach(node => {
+            nodes.update({
+                id: node.id,
+                font: {
+                    size: 16,
+                    color: isDark ? '#ffffff' : '#000000',
+                    strokeWidth: 4,
+                    strokeColor: isDark ? '#000000' : '#ffffff',
+                    face: 'arial'
+                }
+            });
+        });
+    }
+    
+    // Create search bar overlay style
+    function updateSearchBarOverlay() {
+        const searchBarOverlay = document.getElementById('searchBarOverlay');
+        if (searchBarOverlay) {
+            const isDark = document.body.classList.contains('dark-mode');
+            searchBarOverlay.style.background = isDark 
+                ? 'linear-gradient(to bottom, rgba(0,0,0,0.5), transparent)'
+                : 'linear-gradient(to bottom, rgba(0,0,0,0.3), transparent)';
+        }
+    }
+    
+    // Listener for dark mode changes
+    const darkModeToggle = document.getElementById('darkModeSwitch');
+    if (darkModeToggle) {
+        darkModeToggle.addEventListener('change', function() {
+            updateNetworkColors();
+            updateSearchBarOverlay();
+        });
+    }
+    
+    // Create search bar overlay on load
+    updateSearchBarOverlay();
+
+    function handleEnter(e) {
+        if(e.key === 'Enter') startMap();
+    }
+
+    function startMap() {
+        const topic = document.getElementById('topicInput').value;
+        if(!topic) return;
+        
+        nodes.clear();
+        edges.clear();
+        exploredNodes.clear();
+        closeOverlay();
+        fetchAndAddNode(topic, null, true); 
+    }
+
+    function resetView() {
+        network.fit({ animation: { duration: 1000, easingFunction: 'easeInOutQuad' } });
+        closeOverlay();
+    }
+
+    async function fetchAndAddNode(label, parentId, isRoot = false, forceExpand = false) {
+        label = label.trim();
+        // Allow re clicking nodes to add children unless it's a root node and already explored
+        if (!isRoot && !forceExpand && exploredNodes.has(label)) {
+            fetchDetailsOnly(label);
+            return;
+        }
+
+        document.getElementById('loading').style.display = 'block';
+        
+        try {
+            // Get current position of the node or create a new node
+            let currentNode = nodes.get(label);
+            let centerX, centerY;
+            let nodeWasMoved = false;
+
+            // Fetch Data first
+            const response = await fetch(`/api/wiki/?topic=${encodeURIComponent(label)}`);
+            const data = await response.json();
+            const officialTitle = data.title;
+            
+            exploredNodes.add(label);
+            const nodeColor = isRoot ? '#0dcaf0' : '#dc3545'; 
+            const nodeSize = isRoot ? 50 : 25;
+            const isDark = document.body.classList.contains('dark-mode');
+            const fontColor = isDark ? '#ffffff' : '#000000';
+            const fontStrokeColor = isDark ? '#000000' : '#ffffff';
+
+            // If node already exists, use its current position as center
+            if (currentNode) {
+                const currentPos = network.getPositions([label])[label];
+                centerX = currentPos.x;
+                centerY = currentPos.y;
+                
+                // Update the existing node
+                nodes.update({
+                    id: label,
+                    label: officialTitle, 
+                    color: { background: nodeColor, border: 'white' },
+                    size: nodeSize,
+                    font: {
+                        size: 16,
+                        color: fontColor,
+                        strokeWidth: 4,
+                        strokeColor: fontStrokeColor,
+                        face: 'arial'
+                    }
+                });
+            } else {
+                // New node - calculate position based on parent or use center
+                if (!isRoot && parentId === null) {
+                    // Try to find parent from connected nodes
+                    const connected = network.getConnectedNodes(label);
+                    if (connected.length > 0) {
+                        const parentNodeId = connected[0];
+                        const parentPos = network.getPositions([parentNodeId])[parentNodeId];
+                        const myPos = network.getPositions([label])[label];
+                        
+                        let dx = myPos.x - parentPos.x;
+                        let dy = myPos.y - parentPos.y;
+                        const dist = Math.sqrt(dx*dx + dy*dy);
+                        
+                        if (dist > 0) {
+                            dx = dx / dist;
+                            dy = dy / dist;
+                            // Move 1000px away from parent
+                            centerX = parentPos.x + (dx * 1000);
+                            centerY = parentPos.y + (dy * 1000);
+                            nodeWasMoved = true;
+                        } else {
+                            centerX = 0;
+                            centerY = 0;
+                        }
+                    } else {
+                        centerX = 0;
+                        centerY = 0;
+                    }
+                } else {
+                    centerX = 0;
+                    centerY = 0;
+                }
+                
+                // Add new node
+                nodes.add({ 
+                    id: officialTitle, 
+                    label: officialTitle, 
+                    color: { background: nodeColor, border: 'white' },
+                    size: nodeSize,
+                    font: {
+                        size: 16,
+                        color: fontColor,
+                        strokeWidth: 4,
+                        strokeColor: fontStrokeColor,
+                        face: 'arial'
+                    },
+                    x: centerX,
+                    y: centerY
+                });
+            }
+
+            openOverlay(officialTitle, data.summary);
+
+            // Get already connected nodes to avoid duplicates
+            const parentNodeIdForChildren = nodes.get(label) ? label : officialTitle;
+            const alreadyConnectedNodes = new Set(network.getConnectedNodes(parentNodeIdForChildren));
+
+            // Find parent direction for non-root nodes 
+            let directionAwayFromRoot = null;
+            if (!isRoot) {
+                const connectedNodes = network.getConnectedNodes(parentNodeIdForChildren);
+                if (connectedNodes.length > 0) {
+                    // Use the first connected node as parent
+                    const parentId = connectedNodes[0];
+                    const parentPos = network.getPositions([parentId])[parentId];
+                    const dx = centerX - parentPos.x;
+                    const dy = centerY - parentPos.y;
+                    const dist = Math.sqrt(dx*dx + dy*dy);
+                    if (dist > 0) {
+                        // Direction from parent to current node
+                        directionAwayFromRoot = Math.atan2(dy, dx);
+                    }
+                }
+            }
+
+            // Create children - limit to 4 per parent
+            const limit = 4;
+            let count = 0;
+            const radius = 200; // Consistent radius for all nodes
+
+            data.links.forEach((link, index) => {
+                if(count >= limit) return;
+                
+                // Only add if node doesn't exist AND isn't already connected to this parent
+                if (!nodes.get(link) && !alreadyConnectedNodes.has(link)) {
+                    // Calculate position around parent node
+                    let angle;
+                    
+                    if (directionAwayFromRoot !== null && !isRoot && limit > 1) {
+                        // Position children in an arc (180 degrees) away from parent
+                        const spreadRange = Math.PI; // 180 degrees
+                        const startAngle = directionAwayFromRoot - spreadRange / 2;
+                        angle = startAngle + (count / (limit - 1)) * spreadRange; // Spread across arc
+                    } else {
+                        // Root node or no direction - use full circle
+                        angle = (count / limit) * 2 * Math.PI;
+                    }
+                    
+                    const spawnX = centerX + radius * Math.cos(angle);
+                    const spawnY = centerY + radius * Math.sin(angle);
+
+                    nodes.add({ 
+                        id: link, 
+                        label: link, 
+                        color: { background: '#495057', border: '#adb5bd' }, // Grey
+                        size: 15,
+                        font: {
+                            size: 16,
+                            color: fontColor,
+                            strokeWidth: 4,
+                            strokeColor: fontStrokeColor,
+                            face: 'arial'
+                        },
+                        x: spawnX,
+                        y: spawnY
+                    });
+                    edges.add({ from: parentNodeIdForChildren, to: link });
+                    count++;
+                } 
+            });
+
+            // Move Camera after everything is placed
+            if (nodeWasMoved) {
+                // If node was moved, center camera on it
+                network.moveTo({ 
+                    position: {x: centerX, y: centerY}, 
+                    scale: 1.0, 
+                    animation: { duration: 1000, easingFunction: 'easeInOutQuad' } 
+                });
+            } else if (isRoot) {
+                // Root node - fit view to show all nodes
+                network.fit();
+            } else if (!currentNode) {
+                // New child node - focus on it
+                network.focus(officialTitle, {
+                    scale: 1.0,
+                    animation: { duration: 1000, easingFunction: 'easeInOutQuad' }
+                });
+            }
+
+        } catch (error) {
+            console.error("Error:", error);
+        } finally {
+            document.getElementById('loading').style.display = 'none';
+        }
+    }
+
+    async function fetchDetailsOnly(label) {
+         network.focus(label, {
+            scale: 1.0,
+            animation: { duration: 1000, easingFunction: 'easeInOutQuad' }
+        });
+        
+        const response = await fetch(`/api/wiki/?topic=${encodeURIComponent(label)}`);
+        const data = await response.json();
+        openOverlay(data.title, data.summary);
+    }
+
+    network.on("click", function (params) {
+        if (params.nodes.length > 0) {
+            const nodeId = params.nodes[0];
+            const connectedNodes = network.getConnectedNodes(nodeId);
+            const isExplored = exploredNodes.has(nodeId);
+            
+            // If node is already explored and has children, just show details
+            // Only expands if it's not explored yet or if it's explored but has no children
+            if (isExplored && connectedNodes.length > 0) {
+                fetchDetailsOnly(nodeId);
+            } else {
+                // Allow exploring/expanding nodes that aren't explored or have no children yet
+                fetchAndAddNode(nodeId, null, false, true); 
+            }
+        } else {
+            closeOverlay();
+        }
+    });
+
+    function openOverlay(title, summary) {
+        document.getElementById('overlayTitle').innerText = title;
+        document.getElementById('overlaySummary').innerText = summary || "No summary available.";
+        const nameField = document.getElementById('hiddenName');
+        const summaryField = document.getElementById('hiddenSummary');
+        if (nameField) nameField.value = title;
+        if (summaryField) summaryField.value = summary || "";
+        document.getElementById('infoOverlay').style.transform = 'translateY(0)';
+    }
+
+    function closeOverlay() {
+        document.getElementById('infoOverlay').style.transform = 'translateY(100%)';
+    }
+
+    function saveTopicWithMindMap(event) {
+        // Capture current mind map state
+        const nodesData = nodes.get();
+        const edgesData = edges.get();
+        
+        // Save the mind map data
+        const mindMapData = {
+            nodes: nodesData.map(node => ({
+                id: node.id,
+                label: node.label,
+                color: node.color,
+                size: node.size,
+                x: node.x,
+                y: node.y
+            })),
+            edges: edgesData.map(edge => ({
+                from: edge.from,
+                to: edge.to
+            }))
+        };
+        
+        // Set the hidden field value
+        document.getElementById('hiddenMindMapData').value = JSON.stringify(mindMapData);
+        
+        // Allow form to submit normally
+        return true;
+    }
+
+    async function loadSavedMindMap(topicId) {
+        try {
+            document.getElementById('loading').style.display = 'block';
+            
+            // Fetch the saved mind map data
+            const response = await fetch(`/favorite/load/${topicId}/`);
+            const data = await response.json();
+            
+            if (!data.success) {
+                alert(data.message || 'Failed to load mind map');
+                document.getElementById('loading').style.display = 'none';
+                return;
+            }
+            
+            // Clear current mind map
+            nodes.clear();
+            edges.clear();
+            exploredNodes.clear();
+            closeOverlay();
+            
+            // Restore nodes and edges from saved data
+            const savedData = data.mind_map_data;
+            
+            if (savedData.nodes && savedData.nodes.length > 0) {
+                const isDark = document.body.classList.contains('dark-mode');
+                const fontColor = isDark ? '#ffffff' : '#000000';
+                const fontStrokeColor = isDark ? '#000000' : '#ffffff';
+                
+                // Add all nodes first
+                savedData.nodes.forEach(node => {
+                    nodes.add({
+                        id: node.id,
+                        label: node.label,
+                        color: node.color || { background: '#495057', border: '#adb5bd' },
+                        size: node.size || 25,
+                        font: {
+                            size: 16,
+                            color: fontColor,
+                            strokeWidth: 4,
+                            strokeColor: fontStrokeColor,
+                            face: 'arial'
+                        },
+                        x: node.x || 0,
+                        y: node.y || 0
+                    });
+                });
+                
+                // Add all edges
+                if (savedData.edges && savedData.edges.length > 0) {
+                    savedData.edges.forEach(edge => {
+                        edges.add({
+                            from: edge.from,
+                            to: edge.to
+                        });
+                    });
+                }
+                
+                // Only mark nodes as explored if they have children
+                savedData.nodes.forEach(node => {
+                    const hasChildren = savedData.edges.some(edge => edge.from === node.id);
+                    if (hasChildren) {
+                        exploredNodes.add(node.id);
+                    }
+                });
+                
+                // Update the search input with the topic name
+                document.getElementById('topicInput').value = data.name;
+                
+                // Show summary in overlay
+                openOverlay(data.name, data.summary);
+                
+                // Fit the view to show all nodes
+                setTimeout(() => {
+                    network.fit({ animation: { duration: 1000, easingFunction: 'easeInOutQuad' } });
+                }, 100);
+            } else {
+                alert('No mind map data found');
+            }
+            
+        } catch (error) {
+            console.error('Error loading mind map:', error);
+            alert('Failed to load mind map');
+        } finally {
+            document.getElementById('loading').style.display = 'none';
+        }
+    }
+
+    // Add event delegation for Load Map buttons
+    document.addEventListener('click', function(event) {
+        if (event.target.classList.contains('load-map-btn')) {
+            const topicId = event.target.getAttribute('data-topic-id');
+            loadSavedMindMap(parseInt(topicId));
+        }
+    });
+</script>
+{% endblock %}

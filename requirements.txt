@@ -1,0 +1,5 @@
+Django
+requests
+django-crispy-forms
+crispy-bootstrap5
+
